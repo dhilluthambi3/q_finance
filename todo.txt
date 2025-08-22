@@ -1,0 +1,122 @@
+Ahh, that makes sense now — thanks for clarifying. Since **Qiskit jobs for finance** can run for a long time (minutes, hours, or even queued on IBMQ), you don’t want your Flask API call to sit there waiting.
+
+You want a **job submission + async processing + later retrieval of results** workflow. This is a classic **task queue / job orchestration** problem.
+
+---
+
+## 🔄 Typical Workflow
+
+1. **User submits a job** via your Flask API
+
+   * Example: `POST /jobs` with input parameters (portfolio, risk constraints, etc.).
+   * Your API saves the job metadata into a database (MongoDB) with status `"PENDING"`.
+   * Then it enqueues the heavy computation into a **task queue** (Celery task with Qiskit call).
+   * API returns a `job_id` immediately.
+
+2. **Celery worker picks up the job**
+
+   * Worker runs Qiskit computation (`qiskit.QuantumCircuit`, optimizers, etc.).
+   * This could be on:
+
+     * Same AWS instance, or
+     * A more powerful compute node / GPU machine / HPC environment.
+   * Worker updates job status in MongoDB: `"IN_PROGRESS"`, `"SUCCESS"`, or `"FAILED"`.
+
+3. **User checks job status/results later**
+
+   * Example: `GET /jobs/<job_id>`
+   * Your API reads from MongoDB:
+
+     * If `"PENDING"`/`"IN_PROGRESS"` → return status.
+     * If `"SUCCESS"` → return results (or link to results).
+
+---
+
+## 📦 Recommended Tech Stack
+
+Here’s how I’d design it around your **Flask + MongoDB** base:
+
+* **Flask API** → for submission (`POST`) and retrieval (`GET`) endpoints.
+* **Celery** → background task runner for Qiskit computations.
+* **Redis** → task queue (fast, lightweight, standard).
+* **MongoDB** → store job metadata and results (good for long-term persistence).
+* **Optional: Flower** → monitoring dashboard for Celery tasks.
+
+---
+
+## 🏗️ Example Flow
+
+1. **POST /jobs**
+
+   ```json
+   {
+     "problem_type": "portfolio_optimization",
+     "params": { "assets": 5, "budget": 100 }
+   }
+   ```
+
+   Response:
+
+   ```json
+   {
+     "job_id": "64f92a6f",
+     "status": "PENDING"
+   }
+   ```
+
+2. **Celery worker runs Qiskit**
+
+   * Does the computation (minutes–hours).
+   * Writes result back into MongoDB:
+
+     ```json
+     {
+       "job_id": "64f92a6f",
+       "status": "SUCCESS",
+       "result": {
+         "optimal_portfolio": [1,0,1,0,1],
+         "value": 123.45
+       }
+     }
+     ```
+
+3. **GET /jobs/64f92a6f**
+   Response (before completion):
+
+   ```json
+   {
+     "job_id": "64f92a6f",
+     "status": "IN_PROGRESS"
+   }
+   ```
+
+   Response (after completion):
+
+   ```json
+   {
+     "job_id": "64f92a6f",
+     "status": "SUCCESS",
+     "result": {
+       "optimal_portfolio": [1,0,1,0,1],
+       "value": 123.45
+     }
+   }
+   ```
+
+---
+
+## 🔑 Why this stack works
+
+* **Flask** → lightweight REST API.
+* **Redis** → fast job queue; workers pick tasks quickly.
+* **Celery** → proven Python library for long-running async tasks.
+* **MongoDB** → persists job state + results (users can come back hours/days later).
+
+---
+
+👉 So the workflow is:
+**Flask (submit job) → Celery via Redis (async run Qiskit) → MongoDB (store result) → Flask (check result).**
+
+---
+
+Do you want me to **write a concrete code example** for this workflow (Flask + Celery + Redis + MongoDB, with a fake long Qiskit job)? That way you can directly adapt it to your quantum-finance use case.
